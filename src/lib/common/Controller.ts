@@ -4,6 +4,13 @@ import { Sprite } from "../instances/_shapes/Sprite";
 import { v4 as uuidv4 } from "uuid";
 import { Render } from "../Render";
 import { Arrow } from "../instances/_shapes/Arrow";
+import type {
+    ControllerKeyWords,
+    ControllerStatus,
+    ControllerConfig,
+    ControllerProps,
+} from "../types/Controller";
+import type { ControllerRawData } from "../types/raw";
 
 /**
  * Controller class for handling keyboard input, movement, physics, and animations
@@ -58,10 +65,10 @@ export class Controller {
     private _gravity: Vector = new Vector(0, 0.5);
     /** Whether the controlled shape is currently on the ground */
     private _isOnGround: boolean = true;
-    /** Animation frame ID for the update loop */
-    private _animationId: number | null = null;
-    /** Bound reference to the update method for requestAnimationFrame */
-    private _updateBind: () => void = this._update.bind(this);
+    /** Bound reference to the keydown handler for add/removeEventListener parity */
+    private _onKeyDownBind: (event: KeyboardEvent) => void = this._onKeyDown.bind(this);
+    /** Bound reference to the keyup handler for add/removeEventListener parity */
+    private _onKeyUpBind: (event: KeyboardEvent) => void = this._onKeyUp.bind(this);
 
     /**
      * Creates a new Controller instance with the specified configuration
@@ -111,12 +118,13 @@ export class Controller {
     }
 
     /**
-     * Initializes the controller by setting up event listeners and starting the update loop
+     * Initializes the controller by setting up event listeners.
+     * The per-frame update is now driven by the single `Render` tick
+     * (see {@link tick}); the controller no longer owns its own rAF loop.
      * @private
      */
     private _setup(): void {
         this._events();
-        this._update();
     }
 
     /**
@@ -136,25 +144,41 @@ export class Controller {
      * @private
      */
     private _events(): void {
-        document.addEventListener("keydown", (event: KeyboardEvent) => {
-            this._keysPressed.add(event.key);
-        });
-
-        document.addEventListener("keyup", (event: KeyboardEvent) => {
-            this._keysPressed.delete(event.key);
-        });
+        document.addEventListener("keydown", this._onKeyDownBind);
+        document.addEventListener("keyup", this._onKeyUpBind);
     }
 
     /**
-     * Main update loop that handles physics and movement calculations
-     * Runs continuously using requestAnimationFrame for smooth 60fps updates
+     * Records a pressed key for input handling.
+     * @param event - The keyboard event.
      * @private
      */
-    private _update(): void {
+    private _onKeyDown(event: KeyboardEvent): void {
+        this._keysPressed.add(event.key);
+    }
+
+    /**
+     * Clears a released key and flushes the pending save once all keys are up,
+     * so a controlled sprite's resting position is persisted promptly.
+     * @param event - The keyboard event.
+     * @private
+     */
+    private _onKeyUp(event: KeyboardEvent): void {
+        this._keysPressed.delete(event.key);
+        if (this._keysPressed.size === 0) {
+            this._render.flushSave();
+        }
+    }
+
+    /**
+     * Advances the controller one frame (physics, movement, debug arrows).
+     * Called once per frame by the single `Render` tick instead of a
+     * per-controller `requestAnimationFrame` loop (PERF-1).
+     */
+    public tick(): void {
         this._updateDebug();
         this._updatePhysics();
         this._updateMovement();
-        this._animationId = requestAnimationFrame(this._updateBind);
     }
 
     private _updateDebug(): void {
@@ -278,8 +302,14 @@ export class Controller {
             }
         }
 
-        if (movement.x !== 0 || movement.y !== 0 && this._isOnGround) {
-            this._target.position = this._target.position.add(movement.normalize().scale(this._speed));
+        if ((movement.x !== 0 || movement.y !== 0) && this._isOnGround) {
+            const len = movement.len();
+            if (len > 0) {
+                // Mutate position in place to avoid per-frame Vector allocations
+                // in this hot path (PERF-3); the result is consumed immediately.
+                this._target.position.x += (movement.x / len) * this._speed;
+                this._target.position.y += (movement.y / len) * this._speed;
+            }
             this._render.autoSave();
         }
     }
@@ -407,7 +437,7 @@ export class Controller {
 
         this._target = null;
         this._restore();
-        this._render.autoSave();
+        this._render.flushSave();
     }
 
     /**
@@ -423,10 +453,8 @@ export class Controller {
      * Stops the update loop, unbinds from target, and clears input state
      */
     public destroy(): void {
-        if (this._animationId !== null) {
-            cancelAnimationFrame(this._animationId);
-            this._animationId = null;
-        }
+        document.removeEventListener("keydown", this._onKeyDownBind);
+        document.removeEventListener("keyup", this._onKeyUpBind);
 
         this._render._controllers.delete(this._id);
         this.unbind();

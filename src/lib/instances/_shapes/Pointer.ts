@@ -1,6 +1,8 @@
 import { Render } from "@/lib/Render";
 import { Shape } from "../Shape";
 import { Vector } from "@/lib/common/Vector";
+import type { ShapeProps } from "../../types/Shape";
+import type { ShapeRawData } from "../../types/raw";
 
 export interface PointerProps extends ShapeProps {
     scale?: number;
@@ -91,7 +93,7 @@ export class Pointer extends Shape {
         return this._image.height * this._scale;
     }
 
-    public draw(): void {
+    public override draw(): void {
         if (!this._imageLoaded) return;
         
         this._ctx.drawImage(this._image, this.position.x, this.position.y, this._image.width * this._scale, this._image.height * this._scale);
@@ -109,7 +111,7 @@ export class Pointer extends Shape {
         }
     }
 
-    public update(): void {
+    public override update(): void {
         super.update();
         this.draw();
     }
@@ -121,7 +123,7 @@ export class Pointer extends Shape {
         })
     }
 
-    public _rawData(): PointerRawData {
+    public override _rawData(): PointerRawData {
         return {
             id: this.id,
             type: "pointer",
@@ -137,7 +139,7 @@ export class Pointer extends Shape {
         };
     }
 
-    public static _fromRawData(_data: PointerRawData, _render: Render): Pointer {
+    public static override _fromRawData(_data: PointerRawData, _render: Render): Pointer {
         const props: PointerProps = {
             position: new Vector(_data.position.x, _data.position.y),
             rotation: _data.rotation,
@@ -156,7 +158,7 @@ export class Pointer extends Shape {
         return shape;
     }
 
-    public destroy(): void {
+    public override destroy(): void {
         super.destroy();
     }
 }

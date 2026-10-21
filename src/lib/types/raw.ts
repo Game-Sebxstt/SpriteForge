@@ -1,6 +1,10 @@
-type ShapeType = "circle" | "rect" | "sprite" | "arrow" | "pointer" | "controller";
+import type { Vector } from "../common/Vector";
+import type { SpriteGrid } from "../instances/_shapes/Sprite";
+import type { ControllerKeyWords, ControllerStatus } from "./Controller";
 
-interface ShapeRawData {
+export type ShapeType = "circle" | "rect" | "sprite" | "arrow" | "pointer" | "controller";
+
+export interface ShapeRawData {
     id: string;
     type: ShapeType;
     position: Vector;
@@ -10,12 +14,12 @@ interface ShapeRawData {
     visible: boolean;
 }
 
-interface CircleRawData extends ShapeRawData {
+export interface CircleRawData extends ShapeRawData {
     radius: number;
     color: string;
 }
 
-interface RectRawData extends ShapeRawData {
+export interface RectRawData extends ShapeRawData {
     width: number;
     height: number;
     color: string;
@@ -23,28 +27,30 @@ interface RectRawData extends ShapeRawData {
     borderColor: string;
 }
 
-interface SpriteRawData extends ShapeRawData {
+export interface SpriteRawData extends ShapeRawData {
     src: string;
     spriteGrid: SpriteGrid;
-    ignoreFrames: number[]; 
+    ignoreFrames: number[];
     startFrame: number;
     endFrame: number;
     pattern: string[];
     scale: number;
     speed: number;
     loop: boolean;
+    /** Optional per-sprite FPS (Phase 3 §3.3); absent keeps legacy cadence. */
+    fps?: number;
     controller?: ControllerRawData;
     isPlaying: boolean;
     isDebugged: boolean;
 }
 
-interface ArrowRawData extends ShapeRawData {
+export interface ArrowRawData extends ShapeRawData {
     target: Vector;
     color: string;
     strokeWidth: number;
 }
 
-interface ControllerRawData {
+export interface ControllerRawData {
     id: string
     type: string
     keywords: ControllerKeyWords

@@ -3,20 +3,20 @@
 import { useState, useRef, useEffect } from "react";
 import { Sprite } from "@/lib/instances/_shapes/Sprite";
 import SpriteSlot from "@/components/client/panel/SpriteSlot";
+import { useSceneStore } from "@/lib/store/useSceneStore";
 
 interface BottomPanelProps {
-  sprites: Sprite[];
-  selectedSprites: Sprite[];
-  playingSprites: Sprite[];
   onDeleteSprite: (sprite: Sprite) => void;
 }
 
 export default function BottomPanel({
-  sprites,
-  selectedSprites,
-  playingSprites,
   onDeleteSprite
 }: BottomPanelProps) {
+  const sprites = useSceneStore((s) => s.sprites);
+  const views = useSceneStore((s) => s.views);
+
+  const selectedCount = sprites.reduce((n, s) => n + (views[s.id]?.selected ? 1 : 0), 0);
+  const playingCount = sprites.reduce((n, s) => n + (views[s.id]?.isPlaying ? 1 : 0), 0);
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [panelHeight, setPanelHeight] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
@@ -151,11 +151,11 @@ export default function BottomPanel({
             </svg>
             <h3 className="text-sm font-semibold text-gray-200">
               Sprites ({sprites.length})
-              {selectedSprites.length > 0 && (
-                <span className="ml-2 text-blue-400">• {selectedSprites.length} selected</span>
+              {selectedCount > 0 && (
+                <span className="ml-2 text-blue-400">• {selectedCount} selected</span>
               )}
-              {playingSprites.length > 0 && (
-                <span className="ml-2 text-green-400">• {playingSprites.length} playing</span>
+              {playingCount > 0 && (
+                <span className="ml-2 text-green-400">• {playingCount} playing</span>
               )}
             </h3>
           </div>
@@ -180,7 +180,7 @@ export default function BottomPanel({
             <div className="h-full overflow-y-auto">
               <div className="grid gap-3 pb-2 auto-rows-max grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                 {sprites.map((sprite) => {
-                  const isSelected = selectedSprites.some(selected => selected.id === sprite.id);
+                  const isSelected = views[sprite.id]?.selected ?? false;
                   
                   return (
                     <SpriteSlot

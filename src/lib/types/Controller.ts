@@ -1,4 +1,6 @@
-interface ControllerKeyWords {
+import type { Vector } from "../common/Vector";
+
+export interface ControllerKeyWords {
     up: string
     down: string
     left: string
@@ -6,7 +8,7 @@ interface ControllerKeyWords {
     jump: string
 }
 
-interface ControllerStatus {
+export interface ControllerStatus {
     up: string[]
     down: string[]
     left: string[]
@@ -16,14 +18,14 @@ interface ControllerStatus {
     idle: string[]
 }
 
-interface ControllerConfig {
+export interface ControllerConfig {
     up: Vector
     down: Vector
     left: Vector
     right: Vector
 }
 
-interface ControllerProps {
+export interface ControllerProps {
     keywords: ControllerKeyWords
     status: ControllerStatus
     speed?: number

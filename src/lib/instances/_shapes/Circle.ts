@@ -1,6 +1,8 @@
 import { Shape } from "../Shape";
 import { Render } from "../../Render";
 import { Vector } from "@/lib/common/Vector";
+import type { CircleProps } from "../../types/Shape";
+import type { CircleRawData } from "../../types/raw";
 
 /**
  * Circular shape implementation for the rendering system.
@@ -45,7 +47,7 @@ export class Circle extends Shape {
      * circle.draw(); // Manually render the circle on the canvas
      * ```
      */
-    public draw() : void {
+    public override draw() : void {
         if (!this.visible) return;
         this._ctx.beginPath();
         this._ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
@@ -58,7 +60,7 @@ export class Circle extends Shape {
      * Updates the circle's state and re-renders it on the canvas.
      * Calls the parent `update` method for physics and then draws the circle.
      */
-    public update() : void {
+    public override update() : void {
         super.update();
         this.draw();
     }
@@ -105,8 +107,13 @@ export class Circle extends Shape {
      */
     public clone() : Circle {
         return this._render.creator.Circle({
-            ...this,
             position: this.position.clone(),
+            radius: this.radius,
+            color: this.color,
+            zIndex: this.zIndex,
+            rotation: this.rotation,
+            visible: this.visible,
+            dragging: this.dragging,
         });
     }
 
@@ -115,7 +122,7 @@ export class Circle extends Shape {
      * Returns the raw data of the circle.
      * @returns The raw data of the circle.
      */
-    public _rawData() : CircleRawData {
+    public override _rawData() : CircleRawData {
         return {
             id: this.id,
             type: "circle",
@@ -135,7 +142,7 @@ export class Circle extends Shape {
      * @param data - The raw data of the circle.
      * @returns A new `Circle` instance with identical properties.
      */
-    public static _fromRawData(data: CircleRawData, render: Render) : Circle {
+    public static override _fromRawData(data: CircleRawData, render: Render) : Circle {
         const circle = new Circle(data, render, data.id);
         circle.position = new Vector(data.position.x, data.position.y);
         circle.rotation = data.rotation;

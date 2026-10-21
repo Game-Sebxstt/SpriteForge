@@ -4,11 +4,16 @@ import { useState, useEffect } from "react";
 import { Button, Input, Select, Range } from "@/components/common";
 import { X } from "lucide-react";
 import { KEY_MAPPING } from "@/config/key-mapping";
-import { useApp } from "@/hooks/useApp";
 import { Vector } from "@/lib/common/Vector";
+import { useSceneStore } from "@/lib/store/useSceneStore";
+import type { ControllerProps } from "@/lib/types/Controller";
 
 export default function ControllerModal() {
-  const { setIsControllerModalOpen, setSelectedSpriteForController, selectedSpriteForController, isControllerModalOpen } = useApp();
+  const setIsControllerModalOpen = useSceneStore((s) => s.setIsControllerModalOpen);
+  const setSelectedSpriteForController = useSceneStore((s) => s.setSelectedSpriteForController);
+  const selectedSpriteForController = useSceneStore((s) => s.selectedSpriteForController);
+  const isControllerModalOpen = useSceneStore((s) => s.isControllerModalOpen);
+  const patchView = useSceneStore((s) => s.patchView);
   const [config, setConfig] = useState<ControllerProps>({
       keywords: {
         up: "w",
@@ -67,13 +72,25 @@ export default function ControllerModal() {
     value: string
   ) => {
     setConfig(prev => {
-      const newConfig = { ...prev };
       if (field === 'key' && action !== 'idle' && action !== 'fall') {
-        newConfig.keywords[action as keyof ControllerProps['keywords']] = value;
-      } else if (field === 'pattern') {
-        newConfig.status[action] = [value];
+        return {
+          ...prev,
+          keywords: {
+            ...prev.keywords,
+            [action as keyof ControllerProps['keywords']]: value,
+          },
+        };
       }
-      return newConfig;
+      if (field === 'pattern') {
+        return {
+          ...prev,
+          status: {
+            ...prev.status,
+            [action]: [value],
+          },
+        };
+      }
+      return prev;
     });
   };
 
@@ -101,8 +118,9 @@ export default function ControllerModal() {
       selectedSpriteForController.controller.keywords = config.keywords;
       selectedSpriteForController.controller.speed = config.speed || 5;
       selectedSpriteForController.controller.jumpForce = new Vector(0, config.jumpForce || 15);
-    } else {
-      selectedSpriteForController?.manager.controller(config);
+    } else if (selectedSpriteForController) {
+      selectedSpriteForController.manager.controller(config);
+      patchView(selectedSpriteForController.id, { hasController: true });
     }
     handleCancel();
   };
@@ -131,7 +149,7 @@ export default function ControllerModal() {
                 const usedKeys = Object.values(config.keywords);
                 return (
                   <div key={action} className="grid grid-cols-[80px_1fr_1fr] gap-3 items-center">
-                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400 capitalize">{action}</span>
+                    <span id={`controller-action-${action}`} className="text-sm font-medium text-gray-600 dark:text-gray-400 capitalize">{action}</span>
                     {action !== 'idle' && action !== 'fall' ? (
                       <Select
                         value={REVERSE_KEY_MAPPING[config.keywords[action]]}
@@ -141,6 +159,8 @@ export default function ControllerModal() {
                           handleConfigChange(action, 'key', newKey);
                         }}
                         variant="filled"
+                        aria-labelledby={`controller-action-${action}`}
+                        aria-label={`${action} key`}
                       >
                         {Object.keys(KEY_MAPPING).map((label) => {
                           const value = KEY_MAPPING[label as keyof typeof KEY_MAPPING];
@@ -160,6 +180,7 @@ export default function ControllerModal() {
                       placeholder="Pattern (e.g., 4:7)"
                       variant="filled"
                       fullWidth
+                      aria-label={`${action} pattern`}
                     />
                   </div>
                 );

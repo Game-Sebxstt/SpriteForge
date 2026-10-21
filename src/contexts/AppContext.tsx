@@ -1,58 +1,45 @@
 "use client"
 
-import { createContext, useEffect, useState } from "react";
+import { createContext, useRef, useState } from "react";
 import { Render } from "@/lib/Render";
-import { Sprite } from "@/lib/instances/_shapes/Sprite";
 
 interface AppContextProps {
-    setup: (canvas: HTMLCanvasElement) => void;
+    setup: (canvas: HTMLCanvasElement) => (() => void) | void;
     render: Render | null;
-    isPlaying: boolean;
-    setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
-    isControllerModalOpen: boolean;
-    setIsControllerModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
-    selectedSpriteForController: Sprite | null;
-    setSelectedSpriteForController: React.Dispatch<React.SetStateAction<Sprite | null>>;
-    spriteControlled: Sprite | null;
-    setSpriteControlled: React.Dispatch<React.SetStateAction<Sprite | null>>;
 }
 
 export const AppContext = createContext<AppContextProps | null>(null);
 
 export const AppContextProvider = ({ children } : { children: React.ReactNode }) => {
     const [render, setRender] = useState<Render | null>(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [isControllerModalOpen, setIsControllerModalOpen] = useState(false);
-    const [selectedSpriteForController, setSelectedSpriteForController] = useState<Sprite | null>(null);
-    const [spriteControlled, setSpriteControlled] = useState<Sprite | null>(null);
 
-    const setup = (canvas: HTMLCanvasElement) => {
+    const renderRef = useRef<Render | null>(null);
+
+    const setup = (canvas: HTMLCanvasElement): (() => void) | void => {
       if (!canvas) return;
-  
-      const render = new Render(canvas);
-      setRender(render);
-      render.start();
-      setIsPlaying(true);
+
+      // StrictMode double-invoke / remount guard: tear down any prior instance
+      // this provider created before constructing a new one.
+      if (renderRef.current) {
+        renderRef.current.destroy();
+        renderRef.current = null;
+      }
+
+      const instance = new Render(canvas);
+      renderRef.current = instance;
+      setRender(instance);
+      // Do NOT start here; the page.tsx isPlaying effect is the single start owner.
 
       return () => {
-        render.stop();
-        setIsPlaying(false);
+        instance.destroy();
+        if (renderRef.current === instance) {
+          renderRef.current = null;
+        }
       }
     }
 
-    useEffect(() => {
-        if (!render) return;
-        if (isPlaying) render.start();
-        else render.stop();
-    }, [isPlaying, render]);
-
     return (
-        <AppContext.Provider value={{ 
-            setup, render, isPlaying, 
-            setIsPlaying, isControllerModalOpen, setIsControllerModalOpen, 
-            selectedSpriteForController, setSelectedSpriteForController,
-            spriteControlled, setSpriteControlled 
-        }}>
+        <AppContext.Provider value={{ setup, render }}>
             {children}
         </AppContext.Provider>
     )

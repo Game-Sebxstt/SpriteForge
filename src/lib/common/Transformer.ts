@@ -5,6 +5,13 @@ import { Rect } from "../instances/_shapes/Rect";
 import { Sprite } from "../instances/_shapes/Sprite";
 import { v4 as uuidv4 } from "uuid";
 import { Vector } from "./Vector";
+import type { TransformerBounds } from "../types/Transformer";
+import type {
+    RenderEventTouched,
+    RenderEventMouseDown,
+    RenderEventMouseMove,
+    RenderEventMouseUp,
+} from "../types/RenderProvider";
 
 /**
  * Interactive transformation tool for shapes (move, resize, select)
@@ -19,6 +26,8 @@ export class Transformer {
     private _dragStart: Vector | null = null;
     private _shifted: boolean = false;
     private _justFinishedDrag: boolean = false;
+    /** Per-node positions captured at drag start, for undoable moves (§3.6). */
+    private _dragOrigin: Map<string, Vector> = new Map();
 
     private _isResizing: boolean = false;
     private _resizeStart: Vector | null = null;
@@ -42,6 +51,16 @@ export class Transformer {
 
     public padding: number = 10;
 
+    private _onClickedBind: (args: RenderEventTouched) => void = this._onClickedTr.bind(this);
+    private _onTouchedBind: (args: RenderEventTouched) => void = this._onTouchedTr.bind(this);
+    private _onMouseDownBind: (args: RenderEventMouseDown) => void = this._onMouseDownTr.bind(this);
+    private _onMouseMoveBind: (args: RenderEventMouseMove) => void = this._onMouseMoveTr.bind(this);
+    private _onMouseUpBind: (args: RenderEventMouseUp) => void = this._onMouseUpTr.bind(this);
+    private _onTouchStartBind: (args: RenderEventMouseDown) => void = this._onTouchStartTr.bind(this);
+    private _onTouchEndBind: (args: RenderEventMouseUp) => void = this._onTouchEndTr.bind(this);
+    private _onKeyDownBind: (e: KeyboardEvent) => void = this._onKeyDown.bind(this);
+    private _onKeyUpBind: (e: KeyboardEvent) => void = this._onKeyUp.bind(this);
+
     /**
      * Creates a new transformer for interactive shape manipulation
      * @param ctx - Canvas rendering context for drawing transformation UI
@@ -61,19 +80,43 @@ export class Transformer {
      * @private
      */
     private events(): void {
-        this._render.on("click", this._onClickedTr.bind(this));
-        this._render.on("touch", this._onTouchedTr.bind(this));
+        this._render.on("click", this._onClickedBind);
+        this._render.on("touch", this._onTouchedBind);
 
-        this._render.on("mousedown", this._onMouseDownTr.bind(this));
-        this._render.on("mousemove", this._onMouseMoveTr.bind(this));
-        this._render.on("mouseup", this._onMouseUpTr.bind(this));
+        this._render.on("mousedown", this._onMouseDownBind);
+        this._render.on("mousemove", this._onMouseMoveBind);
+        this._render.on("mouseup", this._onMouseUpBind);
 
-        this._render.on("touchstart", this._onTouchStartTr.bind(this));
-        this._render.on("touchmove", this._onMouseMoveTr.bind(this));
-        this._render.on("touchend", this._onTouchEndTr.bind(this));
+        this._render.on("touchstart", this._onTouchStartBind);
+        this._render.on("touchmove", this._onMouseMoveBind);
+        this._render.on("touchend", this._onTouchEndBind);
 
-        window.addEventListener("keydown", this._onKeyDown.bind(this));
-        window.addEventListener("keyup", this._onKeyUp.bind(this));
+        window.addEventListener("keydown", this._onKeyDownBind);
+        window.addEventListener("keyup", this._onKeyUpBind);
+    }
+
+    /**
+     * Destroys the transformer, removing every DOM and engine-emitter listener
+     * it registered (by the same stored reference) and detaching itself from the
+     * render manager so it is not referenced after teardown.
+     */
+    public destroy(): void {
+        this._render.off("click", this._onClickedBind);
+        this._render.off("touch", this._onTouchedBind);
+
+        this._render.off("mousedown", this._onMouseDownBind);
+        this._render.off("mousemove", this._onMouseMoveBind);
+        this._render.off("mouseup", this._onMouseUpBind);
+
+        this._render.off("touchstart", this._onTouchStartBind);
+        this._render.off("touchmove", this._onMouseMoveBind);
+        this._render.off("touchend", this._onTouchEndBind);
+
+        window.removeEventListener("keydown", this._onKeyDownBind);
+        window.removeEventListener("keyup", this._onKeyUpBind);
+
+        this._nodes = [];
+        this._render.manager.removeTransformer();
     }
 
     /**
@@ -163,12 +206,14 @@ export class Transformer {
             if (isNodeInTransformer || this._nodes.length > 0) {
                 this._isDragging = true;
                 this._dragStart = args.pointer.relative;
+                this._captureDragOrigin();
             }
         }
 
         if (this._isClicked() && !this._isResizing) {
             this._isDragging = true;
             this._dragStart = args.pointer.relative;
+            this._captureDragOrigin();
         
             this._nodes.forEach(node => node.emit("dragstart", {
                 pointer: args.pointer,
@@ -217,10 +262,18 @@ export class Transformer {
             this._dragStart = null;
             this._justFinishedDrag = true;
             this._render._enableSelect();
-            this._nodes.forEach(node => node.emit("dragend", {
-                pointer: args.pointer,
-                target: node
-            }));
+            // Record each node's net move as an undoable command (Phase 3 §3.6).
+            this._nodes.forEach(node => {
+                const origin = this._dragOrigin.get(node.id);
+                if (origin) {
+                    this._render.recordMove(node.id, origin, node.position.clone());
+                }
+                node.emit("dragend", {
+                    pointer: args.pointer,
+                    target: node
+                });
+            });
+            this._dragOrigin.clear();
         }
 
         if (this._isResizing) {
@@ -263,7 +316,10 @@ export class Transformer {
 
         if (e.ctrlKey && e.key.toLowerCase() === "x") {
             const nodesToDestroy = [...this._nodes];
+            // Capture snapshots before destruction so each delete is undoable (§3.6).
+            const snapshots = nodesToDestroy.map(node => node._rawData());
             nodesToDestroy.forEach(node => node.destroy());
+            snapshots.forEach(snapshot => this._render.recordDelete(snapshot));
             this.clear();
         }
 
@@ -283,12 +339,15 @@ export class Transformer {
                     node.position.x += node.getWidth() * 2;
                 }
             });
+            // Record after the offset so redo recreates at the final position (§3.6).
+            nodesCloned.forEach(node => this._render.recordCreate(node));
         }
 
         if (e.ctrlKey && e.key.toLowerCase() === "s") {
             e.preventDefault();
-            const serialized = this._render.serialize();
-            localStorage.setItem("canvas", JSON.stringify(serialized));
+            // Persist through the active named project (Phase 3 §3.2), not the
+            // legacy single-slot key.
+            this._render.flushSave();
         }
             
     }
@@ -303,6 +362,18 @@ export class Transformer {
         if (e.key === "Shift") {
             this._shifted = false;
         }
+    }
+
+    /**
+     * Captures each selected node's current position so a completed drag can be
+     * recorded as an undoable move command (Phase 3 §3.6).
+     * @private
+     */
+    private _captureDragOrigin(): void {
+        this._dragOrigin.clear();
+        this._nodes.forEach(node => {
+            this._dragOrigin.set(node.id, node.position.clone());
+        });
     }
 
     /**

@@ -9,44 +9,29 @@ export interface SocketContextProps {
 
 export const SocketContext = createContext<SocketContextProps | null>(null);
 
-const socketInstance = io(`${process.env.NEXT_PUBLIC_WS_URL}`, {
-    autoConnect: false,
-    reconnection: true,
-    reconnectionAttempts: 5,
-});
-
 export const SocketProvider = ({ children }: { children: ReactNode }) => {
-    const [socket, setSocket] = useState<Socket | null>(socketInstance);
+    const [socket, setSocket] = useState<Socket | null>(null);
 
     useEffect(() => {
-        if (!socket) return;
-        socket.connect();
+        const url = process.env.NEXT_PUBLIC_WS_URL;
+        // No URL configured -> never construct the socket (no connection
+        // attempts, no console noise). Collaboration stays dormant until wired.
+        if (!url) return;
 
-        setSocket(socket);
+        const instance = io(url, {
+            autoConnect: false,
+            reconnection: true,
+            reconnectionAttempts: 5,
+        });
 
-        const onConnect = () => {
-            console.log("connected to socket:", socket.id);
-        };
-
-        const onDisconnect = (reason: Socket.DisconnectReason) => {
-            console.log("disconnected from socket:", reason);
-        };
-
-        const onError = (error: Error) => {
-            console.log("error from socket:", error);
-        };
-
-        socket.on("connect", onConnect);
-        socket.on("disconnect", onDisconnect);
-        socket.on("error", onError);
+        instance.connect();
+        setSocket(instance);
 
         return () => {
-            socket.off("connect", onConnect);
-            socket.off("disconnect", onDisconnect);
-            socket.off("error", onError);
-            socket.disconnect();
+            instance.disconnect();
+            setSocket(null);
         };
-    }, [socket]);
+    }, []);
 
     return (
         <SocketContext.Provider value={{ socket }}>

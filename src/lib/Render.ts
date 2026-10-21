@@ -10,6 +10,18 @@ import { Circle } from "./instances/_shapes/Circle";
 import { Sprite } from "./instances/_shapes/Sprite";
 import { Arrow } from "./instances/_shapes/Arrow";
 import { Pointer } from "./instances/_shapes/Pointer";
+import { notify } from "./notify";
+import { ProjectStore } from "./store/ProjectStore";
+import { Camera } from "./common/Camera";
+import { History } from "./common/History";
+import type { SocketEvents, Collaborator } from "./types/Render";
+import type {
+    ShapeRawData,
+    CircleRawData,
+    RectRawData,
+    SpriteRawData,
+    ArrowRawData,
+} from "./types/raw";
 
 /**
  * Main rendering engine for canvas-based 2D graphics and shape management
@@ -32,7 +44,7 @@ export class Render extends RenderProvider {
     private _target: Shape | this = this;
     private _frameId: number | null = null;
     private _resizeBind: () => void = this.resize.bind(this);
-    private _renderBind: () => void = this.render.bind(this);
+    private _tickBind: () => void = this._tick.bind(this);
     private _onClickedBind: (event: MouseEvent) => void = this._onClicked.bind(this);
     private _onTouchStartBind: (event: TouchEvent) => void = this._onTouchStart.bind(this);
     private _onTouchMoveBind: (event: TouchEvent) => void = this._onTouchMove.bind(this);
@@ -41,11 +53,29 @@ export class Render extends RenderProvider {
     private _onMouseDownBind: (event: MouseEvent) => void = this._onMouseDown.bind(this);
     private _onMouseUpBind: (event: MouseEvent) => void = this._onMouseUp.bind(this);
 
+    private _onContextMenuBind: (event: MouseEvent) => void = this._onContextMenu.bind(this);
+
     private _onSocketMouseMoveBind: (event: SocketEvents["user:mousemove"]) => void = this._onSocketMouseMove.bind(this);
     private _onSocketCollaboratorBind: (event: SocketEvents["user:collaborator"]) => void = this._onSocketCollaborator.bind(this);
 
-    private _allowPan: boolean = true;
-    private _panStart: Vector | null = null;
+    /** Timer id for the trailing/max-wait autosave throttle. */
+    private _saveTimeout: ReturnType<typeof setTimeout> | null = null;
+    /** Whether a save has been requested since the last flush. */
+    private _savePending: boolean = false;
+    /** Max-wait window (ms) for the autosave throttle. */
+    private _saveMaxWait: number = 500;
+
+    /** Real zoom/pan camera (Phase 3 §3.7); replaces the old child-translation pan. */
+    public camera: Camera = new Camera();
+    /** Whether a middle-button camera pan is in progress. */
+    private _isPanning: boolean = false;
+    /** Screen-pixel anchor for the active camera pan. */
+    private _panAnchor: Vector | null = null;
+    /** Bound wheel handler for camera zoom. */
+    private _onWheelBind: (event: WheelEvent) => void = this._onWheel.bind(this);
+
+    /** Undo/redo command history (Phase 3 §3.6); in-memory only. */
+    public history: History = new History();
 
     private _isTouched: boolean = false;
     
@@ -57,7 +87,12 @@ export class Render extends RenderProvider {
     private _fps: number = 0;
     private _lastFrameTime: number = performance.now();
     private _frameCount: number = 0;
-    
+
+    /** Cached z-order-sorted child array; rebuilt only when invalidated. */
+    private _sortedChildsCache: Shape[] | null = null;
+    /** Snapshot of the last-seen zIndex values, to detect zIndex changes. */
+    private _lastZIndexSignature: string = "";
+
     public _selectedNodes: Shape[] = [];
 
     public creator: RenderCreator;
@@ -90,6 +125,10 @@ export class Render extends RenderProvider {
         this._backgroundImage.onload = () => {
             this._backgroundImageLoaded = true;
         };
+
+        // The Transformer is created and owned here (exactly once per Render) so
+        // that destroy() can tear it down. See Render.destroy().
+        this.creator.Transformer();
     }
 
     /**
@@ -194,7 +233,34 @@ export class Render extends RenderProvider {
         /**
          * Prevents default context menu (right-click) behavior
          */
-        this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+        this.canvas.addEventListener("contextmenu", this._onContextMenuBind);
+
+        // Wheel-zoom for the camera (Phase 3 §3.7).
+        this.canvas.addEventListener("wheel", this._onWheelBind, { passive: false });
+    }
+
+    /**
+     * Zooms the camera toward the cursor on wheel scroll (Phase 3 §3.7).
+     * @param event - The wheel event.
+     * @private
+     */
+    private _onWheel(event: WheelEvent) : void {
+        event.preventDefault();
+        const { left, top } = this.canvas.getBoundingClientRect();
+        const screenX = event.clientX - left;
+        const screenY = event.clientY - top;
+        // Smooth, direction-aware zoom factor.
+        const factor = Math.exp(-event.deltaY * 0.0015);
+        this.camera.zoomAt(factor, screenX, screenY);
+    }
+
+    /**
+     * Prevents the default browser context menu on the canvas
+     * @param event - The contextmenu mouse event
+     * @private
+     */
+    private _onContextMenu(event: MouseEvent) : void {
+        event.preventDefault();
     }
 
     /**
@@ -268,15 +334,32 @@ export class Render extends RenderProvider {
     }
 
     /**
-     * Returns the shapes in the render in order of their zIndex
+     * Returns the shapes in the render in order of their zIndex (highest first).
+     * The result is cached and only recomputed when the child set or any zIndex
+     * changes, avoiding the previous double-sort per frame (BUG-10, PERF-3).
      * @private
      */
     private _childs() : Shape[] {
-        return [...this.childrens.values()]
-            .map((item, index) => ({ item, index }))
-            .sort((a, b) => b.index - a.index)
-            .map(({item}) => item)
-            .sort((a, b) => b.zIndex - a.zIndex);
+        const values = [...this.childrens.values()];
+        const signature = values.map((c) => `${c.id}:${c.zIndex}`).join("|");
+
+        if (this._sortedChildsCache === null || signature !== this._lastZIndexSignature) {
+            this._sortedChildsCache = values
+                .map((item, index) => ({ item, index }))
+                .sort((a, b) => (b.item.zIndex - a.item.zIndex) || (b.index - a.index))
+                .map(({ item }) => item);
+            this._lastZIndexSignature = signature;
+        }
+
+        return this._sortedChildsCache;
+    }
+
+    /**
+     * Invalidates the cached z-order so it is rebuilt on next access.
+     * @internal
+     */
+    public _invalidateChildsOrder() : void {
+        this._sortedChildsCache = null;
     }
 
     /**
@@ -284,7 +367,7 @@ export class Render extends RenderProvider {
      * @private
      */
     private _childsInvert() : Shape[] {
-        return this._childs().reverse();
+        return [...this._childs()].reverse();
     }
 
     /**
@@ -336,7 +419,6 @@ export class Render extends RenderProvider {
      * @private
      */
     private _onSocketMouseMove(event: SocketEvents["user:mousemove"]) : void {
-        console.log(event);
         this.collaborators.forEach(collaborator => {
             if (collaborator instanceof Pointer && collaborator.email === event.email) {
                 collaborator.position.x = event.pointer.absolute.x;
@@ -346,7 +428,7 @@ export class Render extends RenderProvider {
     }
 
     public _onSocketCollaborator(event: SocketEvents["user:collaborator"]) : void {
-        console.log(event);
+        void event;
     }
 
     /**
@@ -358,20 +440,25 @@ export class Render extends RenderProvider {
     private _onClicked(event: MouseEvent) : void {
         const { clientX, clientY } = event;
         const { left, top, width, height } = this.canvas.getBoundingClientRect();
-        const x = clientX - left;
-        const y = clientY - top;
+        const screenX = clientX - left;
+        const screenY = clientY - top;
 
         const { target } = event;
         
         if (target !== this.canvas) return;
-        if (x < 0 || x > width || y < 0 || y > height) return;
+        if (screenX < 0 || screenX > width || screenY < 0 || screenY > height) return;
+
+        // Pointer `relative` is reported in WORLD space (camera inverse) so all
+        // hit-testing stays correct at any zoom/pan (Phase 3 §3.7).
+        const world = this.camera.screenToWorld(screenX, screenY);
+        this._mouseVector = world;
 
         this._target = this._childsInvert().find((child) => child._isClicked()) ?? this;
 
         this.emit("click", {
             pointer: {
                 absolute: this.creator.Vector(clientX, clientY),
-                relative: this.creator.Vector(x, y)
+                relative: this.creator.Vector(world.x, world.y)
             },
             target: this._target
         });
@@ -380,7 +467,7 @@ export class Render extends RenderProvider {
             this._target.emit("click", {
                 pointer: {
                     absolute: this.creator.Vector(clientX, clientY),
-                    relative: this.creator.Vector(x, y)
+                    relative: this.creator.Vector(world.x, world.y)
                 },
                 target: this._target
             });
@@ -394,23 +481,28 @@ export class Render extends RenderProvider {
      * @private
      */
     private _onTouchStart(event: TouchEvent) : void {
+        const touch = event.touches[0];
+        if (!touch) return;
         this._isTouched = true;
-        const { clientX, clientY } = event.touches[0];
+        const { clientX, clientY } = touch;
         const { left, top, width, height } = this.canvas.getBoundingClientRect();
-        const x = clientX - left;
-        const y = clientY - top;
+        const screenX = clientX - left;
+        const screenY = clientY - top;
 
         const { target } = event;
         
         if (target !== this.canvas) return;
-        if (x < 0 || x > width || y < 0 || y > height) return;
+        if (screenX < 0 || screenX > width || screenY < 0 || screenY > height) return;
+
+        const world = this.camera.screenToWorld(screenX, screenY);
+        this._mouseVector = world;
 
         this._target = this._childsInvert().find((child) => child._isClicked()) ?? this;
 
         this.emit("touchstart", {
             pointer: {
                 absolute: this.creator.Vector(clientX, clientY),
-                relative: this.creator.Vector(x, y)
+                relative: this.creator.Vector(world.x, world.y)
             },
             target: this._target
         });
@@ -419,7 +511,7 @@ export class Render extends RenderProvider {
             this._target.emit("click", {
                 pointer: {
                     absolute: this.creator.Vector(clientX, clientY),
-                    relative: this.creator.Vector(x, y)
+                    relative: this.creator.Vector(world.x, world.y)
                 },
                 target: this._target
             });
@@ -433,10 +525,13 @@ export class Render extends RenderProvider {
      * @private
      */
     private _onTouchMove(event: TouchEvent) : void {
-        const { clientX, clientY } = event.touches[0];
+        const touch = event.touches[0];
+        if (!touch) return;
+        const { clientX, clientY } = touch;
         const { left, top } = this.canvas.getBoundingClientRect();
-        this._mouseVector = this.creator.Vector(clientX - left, clientY - top);
-        this.emit("touchmove", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(clientX - left, clientY - top) }, target: this._target });
+        const world = this.camera.screenToWorld(clientX - left, clientY - top);
+        this._mouseVector = world;
+        this.emit("touchmove", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(world.x, world.y) }, target: this._target });
     }
 
     /**
@@ -446,14 +541,16 @@ export class Render extends RenderProvider {
      * @private
      */
     private _onTouchEnd(event: TouchEvent) : void {
-        if (event.changedTouches.length > 0) {
-            const { clientX, clientY } = event.changedTouches[0];
+        const changedTouch = event.changedTouches[0];
+        if (changedTouch) {
+            const { clientX, clientY } = changedTouch;
             const { left, top } = this.canvas.getBoundingClientRect();
+            const world = this.camera.screenToWorld(clientX - left, clientY - top);
 
-            this.emit("touchend", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(clientX - left, clientY - top) }, target: this._target });
+            this.emit("touchend", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(world.x, world.y) }, target: this._target });
         
             if (this._isTouched) {
-                this.emit("touch", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(clientX - left, clientY - top) }, target: this._target });
+                this.emit("touch", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(world.x, world.y) }, target: this._target });
                 this._isTouched = false;
             }
         }
@@ -468,18 +565,20 @@ export class Render extends RenderProvider {
     private _onMouseMove(event: MouseEvent) : void {
         const { clientX, clientY } = event;
         const { left, top } = this.canvas.getBoundingClientRect();
-        this._mouseVector = this.creator.Vector(clientX - left, clientY - top);
+        const screenX = clientX - left;
+        const screenY = clientY - top;
 
-        if (this._allowPan && this._panStart) {
-            const delta = this._mouseVector.sub(this._panStart);
-            this._childs().forEach(child => {
-                child.position.x += delta.x;
-                child.position.y += delta.y;
-            });
-            this._panStart = this._mouseVector;
+        // Middle-drag pans the CAMERA (Phase 3 §3.7): sprite positions are no
+        // longer mutated by panning. Pan deltas are in screen pixels.
+        if (this._isPanning && this._panAnchor) {
+            this.camera.panBy(screenX - this._panAnchor.x, screenY - this._panAnchor.y);
+            this._panAnchor = this.creator.Vector(screenX, screenY);
         }
 
-        this.emit("mousemove", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(clientX - left, clientY - top) }, target: this._target });
+        const world = this.camera.screenToWorld(screenX, screenY);
+        this._mouseVector = world;
+
+        this.emit("mousemove", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(world.x, world.y) }, target: this._target });
     }
     
     /**
@@ -491,23 +590,28 @@ export class Render extends RenderProvider {
     private _onMouseDown(event: MouseEvent) : void {
         const { clientX, clientY } = event;
         const { left, top, width, height } = this.canvas.getBoundingClientRect();
-        const x = clientX - left;
-        const y = clientY - top;
+        const screenX = clientX - left;
+        const screenY = clientY - top;
 
-        if (x < 0 || x > width || y < 0 || y > height) return;
+        if (screenX < 0 || screenX > width || screenY < 0 || screenY > height) return;
 
-        this._target = this._childsInvert().find((child) => child._isClicked()) ?? this;
-
-        if (this._target instanceof Render && event.button === 1) {
-            this._allowPan = true;
-            this._panStart = this.creator.Vector(x, y);
+        // Middle-button starts a camera pan regardless of what is under the
+        // cursor (Phase 3 §3.7).
+        if (event.button === 1) {
+            this._isPanning = true;
+            this._panAnchor = this.creator.Vector(screenX, screenY);
             return;
         }
+
+        const world = this.camera.screenToWorld(screenX, screenY);
+        this._mouseVector = world;
+
+        this._target = this._childsInvert().find((child) => child._isClicked()) ?? this;
 
         this.emit("mousedown", { 
             pointer: { 
                 absolute: this.creator.Vector(clientX, clientY), 
-                relative: this.creator.Vector(x, y) 
+                relative: this.creator.Vector(world.x, world.y) 
             }, 
             target: this._target 
         });
@@ -523,12 +627,14 @@ export class Render extends RenderProvider {
         const { clientX, clientY } = event;
         const { left, top } = this.canvas.getBoundingClientRect();
 
-        if (this._target instanceof Render && event.button === 1) {
-            this._allowPan = false;
-            this._panStart = null;
+        if (event.button === 1) {
+            this._isPanning = false;
+            this._panAnchor = null;
+            return;
         }
-        
-        this.emit("mouseup", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(clientX - left, clientY - top) }, target: this._target });
+
+        const world = this.camera.screenToWorld(clientX - left, clientY - top);
+        this.emit("mouseup", { pointer: { absolute: this.creator.Vector(clientX, clientY), relative: this.creator.Vector(world.x, world.y) }, target: this._target });
     }
 
     /**
@@ -592,6 +698,10 @@ export class Render extends RenderProvider {
      * @private
      */
     private render(): void {
+        // Reset to the identity transform for screen-space drawing (clear,
+        // background backdrop, FPS). Shapes/transformer are drawn under the
+        // camera transform below (Phase 3 §3.7).
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.clear();
 
         if (this._backgroundImageLoaded) {
@@ -620,12 +730,36 @@ export class Render extends RenderProvider {
             this.ctx.globalAlpha = 1.0;
         }
 
-        this._childs().sort((a, b) => a.zIndex - b.zIndex).forEach(shape => shape.update());
+        // Apply the camera transform for all world-space drawing.
+        this.ctx.setTransform(
+            this.camera.scale, 0, 0, this.camera.scale,
+            this.camera.x, this.camera.y
+        );
+
+        // _childs() is cached highest-zIndex-first; draw back-to-front by
+        // walking it in reverse so lower zIndex shapes render first. The single
+        // cached sort replaces the previous double-sort per frame (PERF-3).
+        const ordered = this._childs();
+        for (let i = ordered.length - 1; i >= 0; i--) {
+            ordered[i]!.update();
+        }
         this._transformer?.update();
 
+        // FPS counter is screen-space UI, not world-space.
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this._updateFps();
         this._showFps();
-        this._frameId = requestAnimationFrame(this._renderBind);
+        this._frameId = requestAnimationFrame(this._tickBind);
+    }
+
+    /**
+     * Advances every controller one frame, then renders. This is the single
+     * engine tick: controllers no longer own their own rAF loop (PERF-1).
+     * @private
+     */
+    private _tick(): void {
+        this._controllers.forEach((controller) => controller.tick());
+        this.render();
     }
 
     /**
@@ -678,7 +812,9 @@ export class Render extends RenderProvider {
      */
     public mousePositionAbsolute() : Vector {
         const { left, top } = this.canvas.getBoundingClientRect();
-        return this.creator.Vector(this._mouseVector.x + left, this._mouseVector.y + top);
+        // _mouseVector is in world space; convert back to screen then to page.
+        const screen = this.camera.worldToScreen(this._mouseVector.x, this._mouseVector.y);
+        return this.creator.Vector(screen.x + left, screen.y + top);
     }
 
     /**
@@ -746,19 +882,81 @@ export class Render extends RenderProvider {
     }
 
     /**
-     * Auto save the render instance and its children into raw data
-     * @returns Array of shape raw data objects
+     * Requests an auto save of the scene using a trailing throttle with a
+     * ~500 ms max-wait window: while requests keep arriving (e.g. a held movement
+     * key), a write is guaranteed at least every <=500 ms. There is no leading
+     * write on the first request of a burst. Use {@link flushSave} to force an
+     * immediate synchronous write.
      */
     public autoSave() : void {
-        localStorage.setItem("canvas", JSON.stringify(this.serialize()));
+        this._savePending = true;
+        if (this._saveTimeout !== null) return;
+
+        this._saveTimeout = setTimeout(() => {
+            this._saveTimeout = null;
+            if (this._savePending) this.flushSave();
+        }, this._saveMaxWait);
     }
 
     /**
-     * Clears the save data and removes all shapes from the render
+     * Forces an immediate synchronous write of the scene to localStorage,
+     * cancelling any pending throttled write. Wraps the write so a quota error
+     * surfaces a non-blocking message and leaves the in-memory scene intact.
+     */
+    public flushSave() : void {
+        if (this._saveTimeout !== null) {
+            clearTimeout(this._saveTimeout);
+            this._saveTimeout = null;
+        }
+        this._savePending = false;
+        this._write();
+    }
+
+    /**
+     * Performs the actual localStorage write, guarded against quota errors.
+     * The scene is written through the ACTIVE named project (Phase 3 §3.2); the
+     * `serialize()` → `ShapeRawData[]` contract is unchanged, only the storage
+     * key/wrapper differs.
+     * @private
+     */
+    private _write() : void {
+        try {
+            ProjectStore.saveActive(this.serialize());
+        } catch (error) {
+            const isQuota =
+                error instanceof DOMException &&
+                (error.name === "QuotaExceededError" || error.code === 22);
+
+            if (isQuota) {
+                console.warn("Render.autoSave: localStorage quota exceeded; scene not saved.");
+                notify("Storage is full. Your changes could not be saved locally.", "error");
+            } else {
+                console.warn("Render.autoSave: failed to save scene.", error);
+            }
+        }
+    }
+
+    /**
+     * Clears the ACTIVE project's scene (Phase 3 §3.2, resolves BUG-9).
+     *
+     * This no longer calls `localStorage.clear()`: it empties only the active
+     * project via a scoped write, so other named projects, the legacy migration
+     * backup, and `config.setup` all survive — which is why the first-run demo
+     * sprites no longer reappear after a clear. The in-memory half tears down
+     * every live child (destroying its controller, arrows, and transformer
+     * attachment) before emptying the map, rather than orphaning live listeners.
      */
     public clearSave() : void {
-        localStorage.clear();
+        // Destroy live children so controllers/arrows/transformer links are torn
+        // down (not orphaned). destroy() mutates `childrens`, so iterate a copy.
+        for (const child of [...this.childrens.values()]) {
+            child.destroy();
+        }
         this.childrens.clear();
+        this._invalidateChildsOrder();
+
+        // Persist the now-empty active project (scoped; no global clear).
+        this.flushSave();
     }
 
     /**
@@ -770,12 +968,37 @@ export class Render extends RenderProvider {
     }
 
     /**
+     * Loads the active named project's scene, running the one-time
+     * legacy→projects migration first if required (Phase 3 §3.2).
+     */
+    public loadActiveProject() : void {
+        const data = ProjectStore.migrateIfNeeded();
+        this.deserialize(data);
+    }
+
+    /**
+     * Replaces the live scene with the given raw data: tears down current
+     * children, deserializes the new data, and flushes the active project.
+     * Used by scene import and project switching.
+     * @param data - The scene to load.
+     */
+    public replaceScene(data: ShapeRawData[]) : void {
+        for (const child of [...this.childrens.values()]) {
+            child.destroy();
+        }
+        this.childrens.clear();
+        this._invalidateChildsOrder();
+        this.deserialize(data);
+        this.flushSave();
+    }
+
+    /**
      * Starts the animation loop and begins rendering
      * @returns This render instance for method chaining
      */
     public start() : Render {
         if (this._frameId) return this;
-        this._frameId = requestAnimationFrame(this._renderBind);
+        this._frameId = requestAnimationFrame(this._tickBind);
         return this;
     }
 
@@ -792,11 +1015,109 @@ export class Render extends RenderProvider {
     }
 
     /**
+     * Rebuilds a shape from its raw data (used by undo/redo to recreate a
+     * deleted/created shape). Delegates to the per-type `_fromRawData`.
+     * @param data - The raw data to rebuild from.
+     * @internal
+     */
+    public _rebuildFromRaw(data: ShapeRawData) : void {
+        if (data.type === "circle") Circle._fromRawData(data as CircleRawData, this);
+        else if (data.type === "rect") Rect._fromRawData(data as RectRawData, this);
+        else if (data.type === "sprite") Sprite._fromRawData(data as SpriteRawData, this);
+        else if (data.type === "arrow") Arrow._fromRawData(data as ArrowRawData, this);
+    }
+
+    /**
+     * Records the creation of a shape as an undoable command (Phase 3 §3.6).
+     * The shape is assumed already created/added; undo destroys it, redo
+     * rebuilds it from its captured raw data. No-op while (un)doing.
+     * @param shape - The freshly created shape.
+     */
+    public recordCreate(shape: Shape) : void {
+        if (this.history.isApplying) return;
+        const snapshot = shape._rawData();
+        this.history.push({
+            label: "create",
+            redo: () => {
+                if (!this.childrens.has(snapshot.id)) this._rebuildFromRaw(snapshot);
+            },
+            undo: () => {
+                const live = this.childrens.get(snapshot.id);
+                if (live) live.destroy();
+            },
+        });
+    }
+
+    /**
+     * Records the deletion of a shape as an undoable command (Phase 3 §3.6).
+     * Capture the snapshot BEFORE calling this; the shape is assumed destroyed.
+     * @param snapshot - The raw data captured before destruction.
+     */
+    public recordDelete(snapshot: ShapeRawData) : void {
+        if (this.history.isApplying) return;
+        this.history.push({
+            label: "delete",
+            redo: () => {
+                const live = this.childrens.get(snapshot.id);
+                if (live) live.destroy();
+            },
+            undo: () => {
+                if (!this.childrens.has(snapshot.id)) this._rebuildFromRaw(snapshot);
+            },
+        });
+    }
+
+    /**
+     * Records a position move as an undoable command (Phase 3 §3.6).
+     * @param id - The shape id.
+     * @param from - The position before the move.
+     * @param to - The position after the move.
+     */
+    public recordMove(id: string, from: Vector, to: Vector) : void {
+        if (this.history.isApplying) return;
+        if (from.x === to.x && from.y === to.y) return;
+        const fromX = from.x, fromY = from.y, toX = to.x, toY = to.y;
+        this.history.push({
+            label: "move",
+            redo: () => {
+                const live = this.childrens.get(id);
+                if (live) { live.position.x = toX; live.position.y = toY; }
+            },
+            undo: () => {
+                const live = this.childrens.get(id);
+                if (live) { live.position.x = fromX; live.position.y = fromY; }
+            },
+        });
+    }
+
+    /**
+     * Undoes the most recent recorded command (Phase 3 §3.6).
+     * @returns This render instance for method chaining.
+     */
+    public undo() : Render {
+        this.history.undo();
+        this.autoSave();
+        return this;
+    }
+
+    /**
+     * Redoes the most recently undone command (Phase 3 §3.6).
+     * @returns This render instance for method chaining.
+     */
+    public redo() : Render {
+        this.history.redo();
+        this.autoSave();
+        return this;
+    }
+
+    /**
      * Destroys the render instance and cleans up all resources
      * Removes event listeners and stops the animation loop
      */
     public destroy() : void {
         this.stop();
+        this.flushSave();
+
         window.removeEventListener("resize", this._resizeBind);
         window.removeEventListener("click", this._onClickedBind);
         window.removeEventListener("touchstart", this._onTouchStartBind);
@@ -805,5 +1126,11 @@ export class Render extends RenderProvider {
         window.removeEventListener("mousemove", this._onMouseMoveBind);
         window.removeEventListener("mousedown", this._onMouseDownBind);
         window.removeEventListener("mouseup", this._onMouseUpBind);
+        this.canvas.removeEventListener("contextmenu", this._onContextMenuBind);
+        this.canvas.removeEventListener("wheel", this._onWheelBind);
+
+        this._controllers.forEach((controller) => controller.destroy());
+        this._transformer?.destroy();
+        this._transformer = null;
     }
 }

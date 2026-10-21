@@ -1,6 +1,8 @@
 import { Shape } from "../Shape";
 import { Render } from "../../Render";
 import { Vector } from "@/lib/common/Vector";
+import type { ArrowProps } from "../../types/Shape";
+import type { ArrowRawData } from "../../types/raw";
 
 export class Arrow extends Shape {
     private _ctx: CanvasRenderingContext2D;
@@ -27,7 +29,7 @@ export class Arrow extends Shape {
         return this._direction;
     }
 
-    public draw(): void {
+    public override draw(): void {
         if (!this.visible) return;
         
         this._angle = Math.atan2(this.target.y - this.position.y, this.target.x - this.position.x);
@@ -66,7 +68,7 @@ export class Arrow extends Shape {
         this._ctx.restore();
     }
 
-    public update(): void {
+    public override update(): void {
         super.update();
         this.draw();
     }
@@ -81,8 +83,14 @@ export class Arrow extends Shape {
 
     public clone(): Arrow {
         return this._render.creator.Arrow({
-            ...this,
             position: this.position.clone(),
+            target: this.target.clone(),
+            color: this.color,
+            strokeWidth: this.strokeWidth,
+            zIndex: this.zIndex,
+            rotation: this.rotation,
+            visible: this.visible,
+            dragging: this.dragging,
         });
     }
 
@@ -91,7 +99,7 @@ export class Arrow extends Shape {
      * Returns the raw data of the arrow.
      * @returns The raw data of the arrow.
      */
-    public _rawData() : ArrowRawData {
+    public override _rawData() : ArrowRawData {
         return {
             id: this.id,
             type: "arrow",
@@ -112,7 +120,7 @@ export class Arrow extends Shape {
      * @param data - The raw data of the arrow.
      * @returns A new `Arrow` instance with identical properties.
      */
-    public static _fromRawData(data: ArrowRawData, render: Render) : Arrow {
+    public static override _fromRawData(data: ArrowRawData, render: Render) : Arrow {
         const arrow = new Arrow(data, render, data.id);
         arrow.position = data.position;
         arrow.rotation = data.rotation;

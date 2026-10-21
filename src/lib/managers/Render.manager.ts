@@ -23,6 +23,7 @@ export class RenderManager {
      */
     public addChild(child: Shape) : void {
         this._render.childrens.set(child.id, child);
+        this._render._invalidateChildsOrder();
         this._render.autoSave();
     }
 
@@ -32,6 +33,7 @@ export class RenderManager {
      */
     public removeChild(child: Shape) : void {
         this._render.childrens.delete(child.id);
+        this._render._invalidateChildsOrder();
         this._render.autoSave();
     }
 
@@ -40,6 +42,9 @@ export class RenderManager {
      * @param transformer - The transformer to set as active
      */
     public addTransformer(transformer: Transformer) : void {
+        if (this._render._transformer && this._render._transformer !== transformer) {
+            this._render._transformer.destroy();
+        }
         this._render._transformer = transformer;
     }
 

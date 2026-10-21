@@ -1,3 +1,9 @@
+import type {
+    ShapeEventsType,
+    ShapeEventsMap,
+    ShapeListenerCallback,
+} from "../types/ShapeProvider";
+
 /**
  * Event provider for shape-related events with type-safe event handling
  * Manages event listeners for shape interactions like clicks, drag operations, and lifecycle events

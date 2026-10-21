@@ -1,5 +1,6 @@
 import { Shape } from "../instances/Shape";
 import { Vector } from "./Vector";
+import type { BodyVelocityProps } from "../types/BodyVelocity";
 
 /**
  * Physics component that handles velocity-based movement for shapes

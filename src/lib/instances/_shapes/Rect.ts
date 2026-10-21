@@ -1,5 +1,8 @@
 import { Shape } from "../Shape";
 import { Render } from "../../Render";
+import { isPointInRotatedRect } from "../../lib/Utils";
+import type { RectProps } from "../../types/Shape";
+import type { RectRawData } from "../../types/raw";
 
 /**
  * Rectangular shape implementation for the rendering system.
@@ -74,27 +77,12 @@ export class Rect extends Shape {
      */
     public _isClicked() : boolean {
         const mouseVector = this._render.mousePositionRelative();
-        
-        if (this.rotation === 0) {
-            return mouseVector.x >= this.position.x && 
-                   mouseVector.x <= this.position.x + this.width &&
-                   mouseVector.y >= this.position.y && 
-                   mouseVector.y <= this.position.y + this.height;
-        }
-        
-        const dx = mouseVector.x - this.position.x;
-        const dy = mouseVector.y - this.position.y;
-        
-        const cos = Math.cos(-this.rotation);
-        const sin = Math.sin(-this.rotation);
-        
-        const localX = dx * cos - dy * sin;
-        const localY = dx * sin + dy * cos;
-        
-        return localX >= 0 && 
-               localX <= this.width &&
-               localY >= 0 && 
-               localY <= this.height;
+        return isPointInRotatedRect(
+            mouseVector.x, mouseVector.y,
+            this.position.x, this.position.y,
+            this.width, this.height,
+            this.rotation
+        );
     }
 
     /**
@@ -106,7 +94,7 @@ export class Rect extends Shape {
      * rect.draw(); // Manually render the rectangle on the canvas
      * ```
      */
-    public draw(): void {
+    public override draw(): void {
         if (!this.visible) return;
         this._ctx.save();
         this._ctx.translate(this.position.x, this.position.y);
@@ -133,7 +121,7 @@ export class Rect extends Shape {
      * Updates the rectangle's state and re-renders it on the canvas.
      * Calls the parent `update` method for physics and then draws the rectangle.
      */
-    public update(): void {
+    public override update(): void {
         super.update();
         this.draw();
     }
@@ -144,8 +132,16 @@ export class Rect extends Shape {
      */
     public clone() : Rect {
         return this._render.creator.Rect({
-            ...this,
             position: this.position.clone(),
+            width: this.width,
+            height: this.height,
+            color: this.color,
+            borderWidth: this.borderWidth,
+            borderColor: this.borderColor,
+            zIndex: this.zIndex,
+            rotation: this.rotation,
+            visible: this.visible,
+            dragging: this.dragging,
         });
     }
 
@@ -154,7 +150,7 @@ export class Rect extends Shape {
      * Returns the raw data of the rectangle.
      * @returns The raw data of the rectangle.
      */
-    public _rawData() : RectRawData {
+    public override _rawData() : RectRawData {
         return {
             id: this.id,
             type: "rect",
@@ -177,7 +173,7 @@ export class Rect extends Shape {
      * @param data - The raw data of the rectangle.
      * @returns A new `Rect` instance with identical properties.
      */
-    public static _fromRawData(data: RectRawData, render: Render) : Rect {
+    public static override _fromRawData(data: RectRawData, render: Render) : Rect {
         const rect = new Rect(data, render, data.id);
         rect.position = data.position;
         rect.rotation = data.rotation;

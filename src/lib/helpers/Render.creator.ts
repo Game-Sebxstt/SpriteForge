@@ -6,6 +6,7 @@ import { Rect as _Rect } from "../instances/_shapes/Rect";
 import { Transformer as _Transformer } from "../common/Transformer";
 import { Arrow as _Arrow } from "../instances/_shapes/Arrow";
 import { Pointer as _Pointer, PointerProps } from "../instances/_shapes/Pointer";
+import type { RectProps, CircleProps, SpriteProps, ArrowProps } from "../types/Shape";
 
 /**
  * Factory class for creating shapes and utility objects within a render context

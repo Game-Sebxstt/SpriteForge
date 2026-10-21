@@ -1,6 +1,12 @@
 {
-  "name": "SpriteForge",
+  "name": "SpriteForge - Sprite Animation Testing Platform",
   "short_name": "SpriteForge",
+  "description": "Test, preview, and fine-tune sprite-sheet animations in real time on an infinite canvas.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#1E40AF",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",
@@ -14,8 +20,5 @@
       "type": "image/png",
       "purpose": "maskable"
     }
-  ],
-  "theme_color": "#1E40AF",
-  "background_color": "#111827",
-  "display": "standalone"
+  ]
 }

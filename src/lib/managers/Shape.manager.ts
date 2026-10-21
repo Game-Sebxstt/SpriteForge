@@ -2,6 +2,7 @@ import { Shape } from "../instances/Shape";
 import { BodyVelocity } from "../common/BodyVelocity";
 import { Vector } from "../common/Vector";
 import { Controller } from "../common/Controller";
+import type { ControllerProps } from "../types/Controller";
 
 /**
  * Manager class for handling shape-specific operations and physics

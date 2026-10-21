@@ -1,10 +1,10 @@
-interface Collaborator {
+export interface Collaborator {
     id: string;
     name: string;
     color: string;
 }
 
-interface SocketEvents {
+export interface SocketEvents {
     "user:start": {
         email: string;
         username: string;

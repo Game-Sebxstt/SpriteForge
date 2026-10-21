@@ -1,8 +1,31 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { AppContextProvider } from "@/contexts/AppContext";
 import { SocketProvider } from "@/contexts/SocketContext";
 import "@/styles/globals.css";
 import AuthProvider from "@/providers/AuthProvider";
+
+// Honest structured data (no fabricated ratings). Emitted via next/script with
+// an application/ld+json type rather than dangerouslySetInnerHTML.
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  name: "SpriteForge",
+  description:
+    "Web platform for testing, previewing, and fine-tuning sprite-sheet animations in real-time.",
+  url: "https://spriteforge.garcessebastian.com",
+  applicationCategory: "GameApplication",
+  operatingSystem: "Web Browser",
+  browserRequirements: "HTML5 Canvas support, JavaScript enabled",
+  softwareVersion: "0.1.0",
+  author: { "@type": "Person", name: "Sebxstt" },
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+    availability: "https://schema.org/InStock",
+  },
+};
 
 export const metadata: Metadata = {
   title: 'SpriteForge - Advanced Sprite Animation Testing Platform',
@@ -120,6 +143,13 @@ export default function RootLayout({
         <link rel="shortcut icon" href="/favicon.ico" />
         <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
         <link rel="manifest" href="/site.webmanifest" />
+        <Script
+          id="structured-data"
+          type="application/ld+json"
+          strategy="beforeInteractive"
+        >
+          {JSON.stringify(jsonLd)}
+        </Script>
       </head>
       <body className="h-full overflow-hidden antialiased">
         <AuthProvider>

@@ -1,52 +1,73 @@
 "use client"
 
 import { useApp } from "@/hooks/useApp";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Sprite } from "@/lib/instances/_shapes/Sprite";
 import BottomPanel from "@/components/client/BottomPanel";
 import FloatingToolbar from "@/components/client/FloatingToolbar";
 import { FloatingGitHubButton } from "@/components/client/FloatingGitHubButton";
 import ControllerModal from "@/components/client/ControllerModal";
+import NoticeHost from "@/components/client/NoticeHost";
+import { useSceneStore } from "@/lib/store/useSceneStore";
+import { attachEngineBridge } from "@/lib/store/engineBridge";
+import { exportSceneJSON, importSceneJSON } from "@/lib/export/exporters";
+import type { SpriteProps } from "@/lib/types/Shape";
+import type { RenderEventMouseMove } from "@/lib/types/RenderProvider";
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { setup, render, isPlaying, setIsPlaying, isControllerModalOpen, selectedSpriteForController } = useApp();
-  const [sprites, setSprites] = useState<Sprite[]>([]);
-  const [selectedSprites, setSelectedSprites] = useState<Sprite[]>([]);
-  const [playingSprites, setPlayingSprites] = useState<Sprite[]>([]);
-  const createCallbackRef = useRef<((args: RenderEventCreate) => void) | null>(null);
+  const { setup, render } = useApp();
+
+  const isPlaying = useSceneStore((s) => s.isPlaying);
+  const setIsPlaying = useSceneStore((s) => s.setIsPlaying);
+  const isControllerModalOpen = useSceneStore((s) => s.isControllerModalOpen);
+  const selectedSpriteForController = useSceneStore((s) => s.selectedSpriteForController);
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    setup(canvasRef.current);
+    return setup(canvasRef.current);
   }, [canvasRef]);
 
-  if (!createCallbackRef.current) {
-    createCallbackRef.current = (args: RenderEventCreate) => {
-      if (args.shape instanceof Sprite) {
-        setSprites((prev) => [...prev, args.shape as unknown as Sprite]);
-
-        args.shape.on("select", () => setSelectedSprites((prev) => [...prev, args.shape as unknown as Sprite]));
-        args.shape.on("deselect", () => setSelectedSprites((prev) => prev.filter(sprite => sprite.id !== args.shape.id)));
-        args.shape.on("play", () => setPlayingSprites((prev) => [...prev, args.shape as unknown as Sprite]));
-        args.shape.on("pause", () => setPlayingSprites((prev) => prev.filter(sprite => sprite.id !== args.shape.id)));
-      }
-    };
-  }
-
+  // Single engine<->store bridge: subscribes once to create/select/deselect/
+  // play/pause/destroy and writes view-models into the scene store.
   useEffect(() => {
-    if (!render || !createCallbackRef.current) return;
+    if (!render) return;
 
-    render.on("create", createCallbackRef.current);
-    render.load(JSON.parse(localStorage.getItem("canvas") ?? "[]"));
+    const detach = attachEngineBridge(render);
+    // Load the active named project, running the one-time legacy->projects
+    // migration first (Phase 3 §3.2).
+    render.loadActiveProject();
 
     return () => {
-      if (render && createCallbackRef.current) {
-        render.off("create", createCallbackRef.current);
-      }
+      detach();
     };
   }, [render]);
 
+  // Undo/redo keyboard shortcuts (Phase 3 §3.6): Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z.
+  useEffect(() => {
+    if (!render) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key.toLowerCase() !== "z") return;
+      e.preventDefault();
+      if (e.shiftKey) render.redo();
+      else render.undo();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [render]);
+
+  // Single render-loop lifecycle owner: the toolbar flips isPlaying, this
+  // effect is the only caller of start()/stop().
+  useEffect(() => {
+    if (!render) return;
+    if (isPlaying) render.start();
+    else render.stop();
+  }, [isPlaying, render]);
+
+  // User-visible behavior (shapes chase the cursor): preserved verbatim.
   useEffect(() => {
     if (!render) return;
 
@@ -65,31 +86,6 @@ export default function Home() {
     };
   }, [render]);
 
-  useEffect(() => {
-    sprites.forEach(sprite => {
-      sprite.on("destroy", () => {
-        setSprites((prev) => prev.filter(s => s.id !== sprite.id));
-        setSelectedSprites((prev) => prev.filter(s => s.id !== sprite.id));
-        setPlayingSprites((prev) => prev.filter(s => s.id !== sprite.id));
-      })
-    });
-
-    return () => {
-      sprites.forEach(sprite => {
-        sprite.off("destroy", () => {
-          setSprites((prev) => prev.filter(s => s.id !== sprite.id));
-          setSelectedSprites((prev) => prev.filter(s => s.id !== sprite.id));
-          setPlayingSprites((prev) => prev.filter(s => s.id !== sprite.id));
-        })
-      })
-    }
-  }, [sprites]);
-
-  useEffect(() => {
-    if (!render) return;
-    render.creator.Transformer();
-  }, [render]);
-
   const handlePlay = () => {
     setIsPlaying(true);
   };
@@ -100,13 +96,38 @@ export default function Home() {
 
   const handleDeleteSprite = (spriteToDelete: Sprite) => {
     if (!render) return;
-    setSprites((prev) => prev.filter(sprite => sprite.id !== spriteToDelete.id));
+    // Capture raw data BEFORE destroying so delete is undoable (Phase 3 §3.6).
+    const snapshot = spriteToDelete._rawData();
     spriteToDelete.destroy();
+    render.recordDelete(snapshot);
   };
 
   const handleCreateSprite = (props: SpriteProps) => {
     if (!render) return;
-    render.creator.Sprite(props);
+    const sprite = render.creator.Sprite(props);
+    render.recordCreate(sprite);
+  };
+
+  const handleUndo = () => {
+    render?.undo();
+  };
+
+  const handleRedo = () => {
+    render?.redo();
+  };
+
+  const handleExportScene = () => {
+    if (!render) return;
+    exportSceneJSON(render);
+  };
+
+  const handleImportScene = (file: File) => {
+    if (!render) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      importSceneJSON(render, String(reader.result ?? ""));
+    };
+    reader.readAsText(file);
   };
 
   return (
@@ -115,6 +136,8 @@ export default function Home() {
         ref={canvasRef} 
         id="canvas" 
         className="w-full h-full"
+        role="application"
+        aria-label="Sprite animation canvas. Use the toolbar to create sprites and the bottom panel to control playback. A bound sprite is moved with its configured keyboard keys (default WASD to move, Space to jump)."
       />
       
       <FloatingToolbar 
@@ -122,11 +145,12 @@ export default function Home() {
         isPlaying={isPlaying}
         onPlay={handlePlay}
         onStop={handleStop}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        onExportScene={handleExportScene}
+        onImportScene={handleImportScene}
       />
       <BottomPanel
-        sprites={sprites}
-        selectedSprites={selectedSprites}
-        playingSprites={playingSprites}
         onDeleteSprite={handleDeleteSprite}
       />
 
@@ -135,6 +159,8 @@ export default function Home() {
       {isControllerModalOpen && selectedSpriteForController && (
         <ControllerModal/>
       )}
+
+      <NoticeHost />
     </div>
   );
 }

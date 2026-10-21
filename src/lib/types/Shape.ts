@@ -1,4 +1,7 @@
-interface ShapeProps {
+import type { Vector } from "../common/Vector";
+import type { SpriteGrid } from "../instances/_shapes/Sprite";
+
+export interface ShapeProps {
     dragging?: boolean;
     position: Vector;
     zIndex?: number;
@@ -6,12 +9,12 @@ interface ShapeProps {
     visible?: boolean;
 }
 
-interface CircleProps extends ShapeProps {
+export interface CircleProps extends ShapeProps {
     radius: number;
     color?: string;
 }
 
-interface RectProps extends ShapeProps {
+export interface RectProps extends ShapeProps {
     width: number;
     height: number;
     color?: string;
@@ -19,19 +22,21 @@ interface RectProps extends ShapeProps {
     borderColor?: string;
 }
 
-interface SpriteProps extends ShapeProps {
+export interface SpriteProps extends ShapeProps {
     src: string;
     spriteGrid: SpriteGrid;
-    ignoreFrames?: number[]; 
+    ignoreFrames?: number[];
     startFrame?: number;
     endFrame?: number;
     pattern?: string[];
     scale?: number;
     speed?: number;
     loop?: boolean;
+    /** Optional per-sprite FPS (Phase 3 §3.3); undefined keeps legacy cadence. */
+    fps?: number;
 }
 
-interface ArrowProps extends ShapeProps {
+export interface ArrowProps extends ShapeProps {
     target: Vector;
     color?: string;
     strokeWidth?: number;

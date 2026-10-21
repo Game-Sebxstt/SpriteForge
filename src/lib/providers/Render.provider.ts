@@ -1,3 +1,9 @@
+import type {
+    RenderEventsType,
+    RenderEventMap,
+    ListenerCallback,
+} from "../types/RenderProvider";
+
 /**
  * Event provider for render-related events with type-safe event handling
  * Manages event listeners for mouse interactions and shape creation events

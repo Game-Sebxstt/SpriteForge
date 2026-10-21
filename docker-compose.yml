@@ -1,0 +1,16 @@
+name: spriteforge
+
+# Compose local: solo la app en localhost:3000.
+# SpriteForge es una app Next.js solo-cliente (localStorage), sin base de datos.
+# El andamiaje de colaboración (socket) y NextAuth quedan dormidos mientras no
+# se definan sus variables en .env (ver .env.example).
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Opcional: déjalo vacío para mantener el socket dormido (recomendado).
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

@@ -6,6 +6,8 @@ import { ShapeManager } from "../managers/Shape.manager";
 import { Transformer } from "../common/Transformer";
 import { ShapeProvider } from "../providers/Shape.provider";
 import { Controller } from "../common/Controller";
+import type { ShapeProps } from "../types/Shape";
+import type { ShapeRawData } from "../types/raw";
 
 /**
  * Abstract base class for all shape primitives in the rendering system.
